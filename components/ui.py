@@ -26,7 +26,11 @@ def show_metrics_row(metrics: dict):
 
 def display_image(path, caption=None, use_full_width=True):
     try:
+        # Newer Streamlit versions
         st.image(str(path), caption=caption or Path(path).name, use_container_width=use_full_width)
+    except TypeError:
+        # Fallback for older versions
+        st.image(str(path), caption=caption or Path(path).name, use_column_width=use_full_width)
     except Exception as e:
         st.error(f"Unable to display image {path}: {e}")
 
