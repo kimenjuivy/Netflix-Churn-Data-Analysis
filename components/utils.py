@@ -1,142 +1,102 @@
-# components/utils.py
-from pathlib import Path
-import zipfile
-import joblib
 import pandas as pd
-import base64
+import numpy as np
 import json
+import pickle
+from pathlib import Path
+import requests
+import zipfile
 
+# --- PATHS ---
 REPO_ROOT = Path(__file__).resolve().parents[1]
-DATA_ZIP = REPO_ROOT / "dataset.zip"
-DATA_RAW_DIR = REPO_ROOT / "data" / "raw"
-MODELS_DIR = REPO_ROOT / "models"
+DATA_DIR = REPO_ROOT / "data"
+RAW_DIR = DATA_DIR / "raw"
 VISUALS_DIR = REPO_ROOT / "visuals"
+MODELS_DIR = REPO_ROOT / "models"
 MODEL_PATH = MODELS_DIR / "churn_pipeline_rf_v1.pkl"
+DATASET_ZIP = REPO_ROOT / "dataset.zip"
 
-# ensure folders exist
-DATA_RAW_DIR.mkdir(parents=True, exist_ok=True)
-MODELS_DIR.mkdir(parents=True, exist_ok=True)
-VISUALS_DIR.mkdir(parents=True, exist_ok=True)
+# --- GITHUB RELEASE URL ---
+GITHUB_RELEASE_URL = "https://github.com/kimenjuivy/Netflix-Churn-Data-Analysis/releases/download/v1.0/dataset.zip"
 
+# --- DATASET HANDLING ---
 def ensure_dataset_extracted():
-    """
-    Extract dataset.zip into data/raw/ if not already present.
-    Returns tuple (ok:bool, message:str)
-    """
-    # if data/raw is non-empty, assume already extracted
+    """Ensure raw dataset exists locally; if missing, download from GitHub Releases."""
     try:
-        if any(DATA_RAW_DIR.iterdir()):
-            return True, f"Data already present under {DATA_RAW_DIR}"
-    except FileNotFoundError:
-        DATA_RAW_DIR.mkdir(parents=True, exist_ok=True)
+        RAW_DIR.mkdir(parents=True, exist_ok=True)
+        if not DATASET_ZIP.exists():
+            r = requests.get(GITHUB_RELEASE_URL)
+            r.raise_for_status()
+            with open(DATASET_ZIP, "wb") as f:
+                f.write(r.content)
+        # extract zip
+        with zipfile.ZipFile(DATASET_ZIP, "r") as zip_ref:
+            zip_ref.extractall(RAW_DIR)
+        return True, "Dataset ready"
+    except Exception as e:
+        return False, f"Failed to prepare dataset: {e}"
 
-    if DATA_ZIP.exists():
-        try:
-            with zipfile.ZipFile(DATA_ZIP, "r") as z:
-                z.extractall(DATA_RAW_DIR)
-            return True, f"Extracted {DATA_ZIP.name} -> {DATA_RAW_DIR}"
-        except Exception as e:
-            return False, f"Failed to extract {DATA_ZIP}: {e}"
-    return False, f"dataset.zip not found at {DATA_ZIP}. Please place dataset.zip in repo root."
-
-def find_raw_csv(preferred_contains="WA_Fn-UseC_-Telco-Customer-Churn"):
-    """
-    Return Path to a raw CSV (prefer telco churn file), or None
-    """
-    csvs = sorted(DATA_RAW_DIR.glob("*.csv"))
-    if not csvs:
-        return None
-    for c in csvs:
-        if preferred_contains in c.name:
-            return c
-    return csvs[0]
-
-def load_raw_telco(preferred_contains="WA_Fn-UseC_-Telco-Customer-Churn"):
-    """
-    Load telco CSV after extraction. Returns (df, error)
-    """
-    ok, msg = ensure_dataset_extracted()
-    if not ok and not any(DATA_RAW_DIR.iterdir()):
-        return None, msg
-    csv_path = find_raw_csv(preferred_contains)
-    if not csv_path:
-        return None, f"No CSV found in {DATA_RAW_DIR}"
+def load_raw_telco():
+    """Load raw churn dataset from raw folder."""
     try:
-        df = pd.read_csv(csv_path)
+        # Assuming CSV name inside zip: cleaned_churn_data.csv
+        csv_file = RAW_DIR / "cleaned_churn_data.csv"
+        if not csv_file.exists():
+            ensure_dataset_extracted()
+        df = pd.read_csv(csv_file)
         return df, None
     except Exception as e:
-        return None, f"Failed to read {csv_path}: {e}"
+        return None, f"Failed to load dataset: {e}"
 
-def load_model(path: Path = None):
-    """
-    Load joblib model. Returns (model, error)
-    """
-    p = Path(path) if path else MODEL_PATH
-    if not p.exists():
-        return None, f"Model not found at {p}. Place churn_pipeline_rf_v1.pkl into models/."
+# --- MODEL HANDLING ---
+def load_model():
+    """Load trained model from models folder."""
     try:
-        m = joblib.load(p)
-        return m, None
+        if not MODEL_PATH.exists():
+            return None, f"{MODEL_PATH.name} not found in models/"
+        with open(MODEL_PATH, "rb") as f:
+            model = pickle.load(f)
+        return model, None
     except Exception as e:
-        return None, f"Failed to load model at {p}: {e}"
+        return None, f"Failed to load model: {e}"
 
 def get_model_input_features(model):
-    """
-    Try to get model input feature names. Returns list or None.
-    Compatible with sklearn pipeline having preprocessor or feature_names_in_
-    """
-    if model is None:
-        return None
-    # direct attribute
+    """Attempt to infer input features from the model (if pipeline)."""
     try:
         if hasattr(model, "feature_names_in_"):
             return list(model.feature_names_in_)
+        return None
     except Exception:
-        pass
-    # pipeline preprocessor
-    try:
-        if hasattr(model, "named_steps"):
-            pre = model.named_steps.get("preprocessor")
-            if pre is not None:
-                # try get_feature_names_out (safe)
-                try:
-                    return list(pre.get_feature_names_out())
-                except Exception:
-                    # fallback to recorded names if available
-                    if hasattr(pre, "feature_names_in_"):
-                        return list(pre.feature_names_in_)
-    except Exception:
-        pass
-    # classifier fallback
-    try:
-        if hasattr(model, "named_steps") and "classifier" in model.named_steps:
-            clf = model.named_steps["classifier"]
-            if hasattr(clf, "feature_names_in_"):
-                return list(clf.feature_names_in_)
-    except Exception:
-        pass
-    return None
+        return None
 
-def list_visuals(extensions=(".png", ".jpg", ".jpeg", ".html")):
-    """List files in visuals/ with specified extensions."""
-    files = [p for p in sorted(VISUALS_DIR.iterdir()) if p.suffix.lower() in extensions]
-    return files
+# --- VISUALS ---
+def list_visuals():
+    """Return a sorted list of all visuals in the visuals folder (PNG/JPG/HTML)."""
+    if not VISUALS_DIR.exists():
+        VISUALS_DIR.mkdir(parents=True, exist_ok=True)
+    files = sorted(VISUALS_DIR.glob("*"))
+    return [f for f in files if f.suffix.lower() in [".png", ".jpg", ".jpeg", ".html"]]
 
-def df_to_download_link(df, filename="download.csv"):
-    """Return HTML anchor tag to download a DataFrame as CSV."""
-    csv = df.to_csv(index=False)
-    b64 = base64.b64encode(csv.encode()).decode()
-    return f'<a href="data:file/csv;base64,{b64}" download="{filename}">Download {filename}</a>'
-
-def safe_parse_json_row(text):
-    """Parse a single-row JSON input, return DataFrame or (None,error)"""
+# --- JSON HANDLING FOR SINGLE-PREDICTION ---
+def safe_parse_json_row(json_str):
+    """
+    Safely parse a single-row or list-of-rows JSON string into a DataFrame.
+    Returns (DataFrame, error message)
+    """
     try:
-        obj = json.loads(text)
-        if isinstance(obj, dict):
-            return pd.DataFrame([obj]), None
-        elif isinstance(obj, list) and len(obj) > 0 and isinstance(obj[0], dict):
-            return pd.DataFrame(obj), None
-        else:
-            return None, "JSON must be a dict or list-of-dicts representing one or more rows."
+        data = json.loads(json_str)
+        if isinstance(data, dict):
+            data = [data]  # wrap single row into list
+        df = pd.DataFrame(data)
+        return df, None
     except Exception as e:
         return None, f"Invalid JSON: {e}"
+
+# --- DOWNLOAD LINK FOR PREDICTIONS ---
+def df_to_download_link(df, filename="predictions.csv"):
+    """Return a HTML link to download a DataFrame as CSV."""
+    csv = df.to_csv(index=False)
+    b64 = base64.b64encode(csv.encode()).decode()
+    return f'<a href="data:file/csv;base64,{b64}" download="{filename}">Download CSV</a>'
+
+# --- MISC ---
+import base64
