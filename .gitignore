@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.pyc
+.env
+.venv
+.env.* 
+
+*.csv
+# Jupyter
+.ipynb_checkpoints
+
+# Data
+data/raw/*
+!data/raw/README.md
+
+# Models
+models/*
+!models/churn_pipeline_rf_v1.pkl
+
+# Visuals
+visuals/*
+
+# Streamlit cache
+.streamlit/
+
+# system
+.DS_Store
